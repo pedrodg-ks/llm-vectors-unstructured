@@ -6,6 +6,15 @@ from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain.text_splitter import CharacterTextSplitter
 from openai import OpenAI
 from neo4j import GraphDatabase
+from textblob import TextBlob
+from textblob.sentiments import NaiveBayesAnalyzer
+from textblob.np_extractors import ConllExtractor
+import spacy
+
+nlp = spacy.load("en_core_web_sm")
+
+extractor = ConllExtractor()
+analyzer = NaiveBayesAnalyzer()
 
 COURSES_PATH = "llm-vectors-unstructured/data/asciidoc"
 
@@ -36,21 +45,20 @@ def get_course_data(llm, chunk):
 
     path = chunk.metadata['source'].split(os.path.sep)
 
+
     data['course'] = path[-6]
     data['module'] = path[-4]
     data['lesson'] = path[-2]
     data['url'] = f"https://graphacademy.neo4j.com/courses/{data['course']}/{data['module']}/{data['lesson']}"
     data['text'] = chunk.page_content
     data['embedding'] = get_embedding(llm, data['text'])
-
+    data['topics'] = TextBlob(data['text']).noun_phrases
     return data
 
 # Create OpenAI object
-
 llm = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
 # Connect to Neo4j
-
 driver = GraphDatabase.driver(
     os.getenv('NEO4J_URI'),
     auth=(
@@ -71,6 +79,10 @@ def create_chunk(tx, data):
         MERGE (l)-[:CONTAINS]->(p:Paragraph{text: $text})
         WITH p
         CALL db.create.setNodeVectorProperty(p, "embedding", $embedding)
+        FOREACH (topic in $topics |
+            MERGE (t:Topic {name: topic})
+            MERGE (p)-[:MENTIONS]->(t)
+        )
         """, 
         data
         )
